@@ -1,114 +1,155 @@
-// Traffic and pedestrians. Cars drive the road grid: each picks an
-// intersection, drives to it, then turns at random and keeps going, braking
-// for the car ahead. Pedestrians stroll the sidewalks, flee from gunfire and
-// from a speeding car, and sometimes flag a taxi. All of it is deterministic
-// from the world's random stream.
-import { CAR, CAR_MODELS, ROAD, WORLD } from './config.js';
-import { angleDiff, clamp, dist, pick, range } from './random.js';
-import { nearestRoadPoint, onRoad } from './city.js';
+// Traffic cars and pedestrians: they drive the road grid, brake for obstacles,
+// and pedestrians stroll the sidewalks and flee from gunfire.
+import { ROADS_V, ROADS_H, WORLD_W, WORLD_H } from './config.js';
+import { buildingAt, snapToRoad } from './city.js';
+import { angleDiff, clamp, dist2, wrapAngle } from './random.js';
 
-export function createTrafficCar(random, x, y, model, police) {
-  const angle = Math.floor(random() * 4) * (Math.PI / 2);
-  return {
-    kind: 'car', x, y, angle, speed: 0, model, police: !!police,
-    health: CAR.health, target: null, color: model.color,
-    brake: false, sirenT: random() * 2, stuckT: 0, ramT: 0, bumpT: 0, crashT: 0,
-  };
+function nearestRoadLine(pos, lines) {
+  let best = lines[0];
+  for (const l of lines) if (Math.abs(l - pos) < Math.abs(best - pos)) best = l;
+  return best;
 }
 
-export function spawnTrafficCar(random, city, nearX, nearY) {
-  for (let tries = 0; tries < 20; tries += 1) {
-    const x = clamp(nearX + range(random, -900, 900), 100, WORLD.width - 100);
-    const y = clamp(nearY + range(random, -900, 900), 100, WORLD.height - 100);
-    if (!onRoad(x, y)) continue;
-    const p = nearestRoadPoint(x, y);
-    if (dist(p.x, p.y, nearX, nearY) < 350) continue;
-    return createTrafficCar(random, p.x, p.y, pick(random, CAR_MODELS), false);
+// Pick the next intersection a traffic car should head for.
+export function pickTrafficTarget(car, rng) {
+  const vertical = rng.chance(0.5);
+  if (vertical) {
+    const x = rng.pick(ROADS_V);
+    const y = rng.pick(ROADS_H);
+    return { x, y };
   }
-  return null;
+  const x = rng.pick(ROADS_V);
+  const y = rng.pick(ROADS_H);
+  return { x, y };
 }
 
-export function createPedestrian(random, x, y) {
-  return {
-    kind: 'ped', x, y, angle: random() * Math.PI * 2, speed: 0,
-    target: null, fleeT: 0, color: pick(random, ['#e8b48a', '#8ab8e8', '#e88a8a', '#a8e88a', '#d8d8d8', '#e8d88a']),
-    shirt: pick(random, ['#c94f43', '#4f7ec9', '#7ed491', '#e8e4da', '#b87ec9', '#e08ab8']),
-    panic: 0, waiting: random() < 0.12,
-  };
-}
-
-export function spawnPedestrian(random, x, y) {
-  const px = clamp(x + range(random, -500, 500), 60, WORLD.width - 60);
-  const py = clamp(y + range(random, -500, 500), 60, WORLD.height - 60);
-  return createPedestrian(random, px, py);
-}
-
-// Pick the next intersection a traffic car drives toward.
-function nextTarget(car, random) {
-  const gx = Math.round(car.x / ROAD.pitch) * ROAD.pitch;
-  const gy = Math.round(car.y / ROAD.pitch) * ROAD.pitch;
-  const dirs = [[ROAD.pitch, 0], [-ROAD.pitch, 0], [0, ROAD.pitch], [0, -ROAD.pitch]];
-  const d = pick(random, dirs);
-  return {
-    x: clamp(gx + d[0], ROAD.pitch, WORLD.width - ROAD.pitch),
-    y: clamp(gy + d[1], ROAD.pitch, WORLD.height - ROAD.pitch),
-  };
-}
-
-export function stepTrafficCar(car, dt, random, world) {
-  if (!car.target || dist(car.x, car.y, car.target.x, car.target.y) < 26) car.target = nextTarget(car, random);
-  const want = Math.atan2(car.target.y - car.y, car.target.x - car.x);
-  const turn = clamp(angleDiff(car.angle, want), -1, 1);
-  const maxSpeed = 150 * car.model.speed * (car.police ? 1.35 : 1);
-  // Brake for the car ahead (traffic jam behaviour) and for the player.
-  let ahead = 1;
+function carAhead(world, car, lookDist) {
+  const cx = Math.cos(car.angle);
+  const cy = Math.sin(car.angle);
+  let closest = Infinity;
   for (const other of world.cars) {
-    if (other === car || other.dead) continue;
-    const dx = other.x - car.x, dy = other.y - car.y;
-    const forward = dx * Math.cos(car.angle) + dy * Math.sin(car.angle);
-    const side = Math.abs(-dx * Math.sin(car.angle) + dy * Math.cos(car.angle));
-    if (forward > 0 && forward < 90 && side < 34) ahead = 0;
+    if (other === car) continue;
+    const dx = other.x - car.x;
+    const dy = other.y - car.y;
+    const along = dx * cx + dy * cy;
+    if (along < 0 || along > lookDist) continue;
+    const side = Math.abs(-dx * cy + dy * cx);
+    if (side < 34 && along < closest) closest = along;
   }
-  car.brake = ahead === 0;
-  const targetSpeed = car.brake ? 0 : maxSpeed;
-  car.speed += clamp(targetSpeed - car.speed, -500 * dt, 260 * dt);
-  car.angle += turn * 2.2 * dt * clamp(Math.abs(car.speed) / 60, 0.3, 1);
-  car.x += Math.cos(car.angle) * car.speed * dt;
-  car.y += Math.sin(car.angle) * car.speed * dt;
-  car.x = clamp(car.x, 40, WORLD.width - 40);
-  car.y = clamp(car.y, 40, WORLD.height - 40);
-  car.sirenT += dt;
+  // The player on foot in front of the car also makes it brake.
+  const p = world.player;
+  if (p.onFoot && !p.dead) {
+    const dx = p.x - car.x;
+    const dy = p.y - car.y;
+    const along = dx * cx + dy * cy;
+    if (along > 0 && along < lookDist && Math.abs(-dx * cy + dy * cx) < 30) {
+      closest = Math.min(closest, along);
+    }
+  }
+  return closest;
 }
 
-export function stepPedestrian(ped, dt, random, world) {
-  if (ped.fleeT > 0) {
-    ped.fleeT -= dt;
-    ped.speed = 260;
-    ped.x += Math.cos(ped.angle) * ped.speed * dt;
-    ped.y += Math.sin(ped.angle) * ped.speed * dt;
-  } else if (ped.waiting) {
-    ped.speed = 0;
-    if (random() < dt * 0.05) ped.waiting = false;
-  } else {
-    if (!ped.target || dist(ped.x, ped.y, ped.target.x, ped.target.y) < 20 || random() < dt * 0.02) {
-      const gx = Math.round(ped.x / ROAD.pitch) * ROAD.pitch;
-      const gy = Math.round(ped.y / ROAD.pitch) * ROAD.pitch;
-      ped.target = {
-        x: clamp(gx + pick(random, [-1, 0, 1]) * ROAD.pitch, 60, WORLD.width - 60),
-        y: clamp(gy + pick(random, [-1, 0, 1]) * ROAD.pitch, 60, WORLD.height - 60),
-      };
+export function updateTraffic(world, dt) {
+  for (const car of world.cars) {
+    if (!car.driver || car.police) continue;
+    if (!car.target || dist2(car.x, car.y, car.target.x, car.target.y) < 40 * 40) {
+      car.target = pickTrafficTarget(car, world.rng);
     }
-    const want = Math.atan2(ped.target.y - ped.y, ped.target.x - ped.x);
-    ped.angle += clamp(angleDiff(ped.angle, want), -3 * dt, 3 * dt);
-    ped.speed = 62;
-    ped.x += Math.cos(ped.angle) * ped.speed * dt;
-    ped.y += Math.sin(ped.angle) * ped.speed * dt;
+    const want = Math.atan2(car.target.y - car.y, car.target.x - car.x);
+    const turn = clamp(angleDiff(car.angle, want), -1, 1);
+    car.angle = wrapAngle(car.angle + turn * 1.6 * dt);
+    const ahead = carAhead(world, car, 150);
+    const cruise = 120;
+    if (ahead < 90) {
+      car.speed = Math.max(0, car.speed - 320 * dt);
+    } else if (car.speed < cruise) {
+      car.speed = Math.min(cruise, car.speed + 110 * dt);
+    }
+    const nx = car.x + Math.cos(car.angle) * car.speed * dt;
+    const ny = car.y + Math.sin(car.angle) * car.speed * dt;
+    if (!buildingAt(world.city, nx, ny)) {
+      car.x = clamp(nx, 30, WORLD_W - 30);
+      car.y = clamp(ny, 30, WORLD_H - 30);
+    } else {
+      car.speed = 0;
+      car.target = pickTrafficTarget(car, world.rng);
+    }
+    // Keep traffic cars roughly on the road: if they drifted off, steer back.
+    if (!onRoadNear(car.x, car.y)) {
+      const snap = snapToRoad(car.x, car.y);
+      car.target = { x: snap.x, y: snap.y };
+    }
   }
-  ped.x = clamp(ped.x, 30, WORLD.width - 30);
-  ped.y = clamp(ped.y, 30, WORLD.height - 30);
-  // A gunshot or a near miss sends pedestrians running.
-  if (world.noiseT > 0 && dist(ped.x, ped.y, world.noiseX, world.noiseY) < 420 && ped.fleeT <= 0) {
-    ped.fleeT = 2 + random() * 2;
-    ped.angle = Math.atan2(ped.y - world.noiseY, ped.x - world.noiseX);
+}
+
+export function onRoadNear(x, y) {
+  for (const rx of ROADS_V) if (Math.abs(x - rx) < 90) return true;
+  for (const ry of ROADS_H) if (Math.abs(y - ry) < 90) return true;
+  return false;
+}
+
+export function updatePeds(world, dt) {
+  const p = world.player;
+  for (const ped of world.peds) {
+    const dPlayer = dist2(ped.x, ped.y, p.x, p.y);
+    const gunfire = world.bullets.length > 0 && dPlayer < 500 * 500;
+    if (gunfire || ped.panic > 0) {
+      ped.panic = Math.max(ped.panic, 1.5);
+      // Flee away from the player.
+      const away = Math.atan2(ped.y - p.y, ped.x - p.x);
+      ped.angle = away;
+      ped.speed = 150;
+    } else {
+      ped.speed = 40;
+      if (!ped.target || dist2(ped.x, ped.y, ped.target.x, ped.target.y) < 30 * 30) {
+        const snap = snapToRoad(
+          clamp(ped.x + world.rng.range(-300, 300), 100, WORLD_W - 100),
+          clamp(ped.y + world.rng.range(-300, 300), 100, WORLD_H - 100),
+        );
+        ped.target = { x: snap.x + world.rng.range(-50, 50), y: snap.y + world.rng.range(-50, 50) };
+      }
+      ped.angle = Math.atan2(ped.target.y - ped.y, ped.target.x - ped.x);
+    }
+    ped.panic = Math.max(0, ped.panic - dt);
+    const nx = ped.x + Math.cos(ped.angle) * ped.speed * dt;
+    const ny = ped.y + Math.sin(ped.angle) * ped.speed * dt;
+    if (!buildingAt(world.city, nx, ny)) {
+      ped.x = clamp(nx, 20, WORLD_W - 20);
+      ped.y = clamp(ny, 20, WORLD_H - 20);
+    } else {
+      ped.target = null;
+    }
+  }
+}
+
+// A traffic car the player hits hard becomes a crash: damage + sparks + heat.
+export function crashCheck(world, car) {
+  if (car.damage >= 100) return;
+  for (const other of world.cars) {
+    if (other === car) continue;
+    const d = dist2(car.x, car.y, other.x, other.y);
+    const minD = (car.len + other.len) / 2 - 6;
+    if (d < minD * minD && Math.abs(car.speed) > 60) {
+      car.damage = Math.min(100, car.damage + 12);
+      other.damage = Math.min(100, other.damage + 10);
+      car.speed *= 0.35;
+      other.speed *= 0.5;
+      spawnSparks(world, (car.x + other.x) / 2, (car.y + other.y) / 2);
+      return true;
+    }
+  }
+  return false;
+}
+
+export function spawnSparks(world, x, y) {
+  for (let i = 0; i < 8; i++) {
+    world.particles.push({
+      x, y,
+      vx: world.rng.range(-120, 120),
+      vy: world.rng.range(-120, 120),
+      life: 0.4,
+      color: '#ffd23e',
+      size: 3,
+    });
   }
 }

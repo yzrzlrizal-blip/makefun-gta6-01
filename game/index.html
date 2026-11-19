@@ -1,19 +1,122 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — an open-world crime story</title>
+<title>Solmar Bay — an open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1420; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #0b0e14; overflow: hidden;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: #f2f2f2; }
+  #wrap { position: relative; width: 1280px; height: 720px; margin: 0 auto;
+    top: 50%; transform: translateY(-50%); }
+  #game { display: block; width: 1280px; height: 720px; background: #22303a; }
+  .hidden { display: none !important; }
+
+  /* HUD */
+  #hud { position: absolute; inset: 0; pointer-events: none; font-size: 15px; }
+  #hud-top { position: absolute; top: 12px; left: 14px; display: flex; gap: 18px;
+    align-items: center; text-shadow: 0 1px 3px #000; }
+  #hud-cash { font-size: 22px; font-weight: 700; color: #7dff9a; }
+  #hud-stars { font-size: 20px; letter-spacing: 2px; }
+  #hud-clock, #hud-district { font-weight: 600; color: #ffe9a8; }
+  #hud-health-wrap { width: 150px; height: 12px; background: rgba(0,0,0,.55);
+    border: 1px solid #fff3; border-radius: 6px; overflow: hidden; }
+  #hud-health { height: 100%; width: 100%; background: #3fae5a; }
+  #minimap { position: absolute; top: 12px; right: 12px; width: 200px; height: 150px;
+    border: 2px solid rgba(255,255,255,.65); border-radius: 4px; background: #10141a; }
+  #hud-objective { position: absolute; left: 14px; bottom: 64px; max-width: 560px;
+    background: rgba(0,0,0,.62); padding: 8px 12px; border-left: 4px solid #ffd23e;
+    border-radius: 3px; font-size: 15px; line-height: 1.35; }
+  #hud-speed { position: absolute; right: 14px; bottom: 64px; text-align: right;
+    background: rgba(0,0,0,.62); padding: 8px 12px; border-radius: 3px; font-weight: 600; }
+  #hud-ammo { position: absolute; right: 14px; bottom: 110px; color: #ffe66d;
+    text-shadow: 0 1px 3px #000; font-size: 15px; }
+  #hud-messages { position: absolute; left: 14px; bottom: 120px; max-width: 520px; }
+  #hud-messages .msg { background: rgba(0,0,0,.55); padding: 5px 10px; margin-top: 4px;
+    border-radius: 3px; font-size: 14px; }
+  #save-note { position: absolute; left: 14px; top: 52px; color: #bcd6ff;
+    text-shadow: 0 1px 3px #000; font-size: 14px; }
+  #banner { position: absolute; top: 38%; left: 50%; transform: translateX(-50%);
+    font-size: 26px; font-weight: 800; color: #ffd23e; text-shadow: 0 2px 8px #000;
+    letter-spacing: 1px; white-space: nowrap; }
+  #controls { position: absolute; left: 14px; bottom: 12px; font-size: 12.5px;
+    color: #cfd6dd; text-shadow: 0 1px 2px #000; }
+  #hud-buttons { position: absolute; right: 14px; top: 172px; pointer-events: auto;
+    display: flex; flex-direction: column; gap: 6px; }
+  .hbtn { background: rgba(0,0,0,.6); color: #fff; border: 1px solid #fff5;
+    border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
+  .hbtn:hover { background: rgba(255,210,62,.85); color: #111; }
+
+  /* Title + end screens */
+  .screen { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: linear-gradient(180deg, rgba(10,16,34,.82), rgba(60,20,60,.55) 55%, rgba(8,10,18,.9)); }
+  .screen h1 { font-size: 84px; letter-spacing: 4px; color: #ffd23e;
+    text-shadow: 0 4px 0 #b3541e, 0 8px 24px #000; font-style: italic; }
+  .screen h2 { font-size: 20px; color: #9fd8ff; margin-top: 2px; letter-spacing: 3px;
+    text-transform: uppercase; }
+  .screen p { max-width: 640px; margin: 18px 0 6px; line-height: 1.5; color: #e8e8e8; }
+  .screen .keys { font-size: 13.5px; color: #c8ccd2; margin-top: 14px; line-height: 1.8; }
+  .btn { pointer-events: auto; margin-top: 16px; padding: 12px 34px; font-size: 18px;
+    font-weight: 700; border: none; border-radius: 6px; cursor: pointer;
+    background: #ffd23e; color: #1a1a1a; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+  .btn:hover { background: #ffe066; }
+  .btn.ghost { background: transparent; color: #fff; border: 2px solid #fff; }
+  #end-title { font-size: 96px; color: #ff3b30; }
+  #save-state { color: #9fd8ff; font-size: 14px; margin-top: 8px; }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="Solmar Bay: an open-world crime game. Drive and walk around the city, steal cars, run jobs, and lose the police."></canvas>
-<p id="status" role="status" aria-live="polite"></p>
+<div id="wrap">
+  <canvas id="game" width="1280" height="720"></canvas>
+
+  <div id="hud">
+    <div id="hud-top">
+      <span id="hud-cash">$150</span>
+      <div id="hud-health-wrap"><div id="hud-health"></div></div>
+      <span id="hud-stars">☆☆☆☆☆</span>
+      <span id="hud-clock">08:00 · Day 1 · Morning</span>
+      <span id="hud-district">Downtown</span>
+    </div>
+    <div id="save-note"></div>
+    <canvas id="minimap" width="200" height="150"></canvas>
+    <div id="hud-buttons">
+      <button class="hbtn" id="btn-save">💾 Save</button>
+      <button class="hbtn" id="btn-mute">🔊 Sound</button>
+    </div>
+    <div id="hud-messages"></div>
+    <div id="hud-objective">Press M to start the next job</div>
+    <div id="hud-ammo"></div>
+    <div id="hud-speed">On foot</div>
+    <div id="banner" class="hidden"></div>
+    <div id="controls">WASD move · Shift sprint · E enter / steal car · F punch · Click / Space shoot · R reload · M next job · P pause · U mute</div>
+  </div>
+
+  <div id="title-screen" class="screen">
+    <h1>SOLMAR BAY</h1>
+    <h2>An open-world crime story</h2>
+    <p>Nia Solano is back in her hometown after five years away — and her old friend
+    Rico Ferrante has one last run of jobs for her. Steal cars, lose the Solmar PD,
+    and take the docks back from the Harlow crew, one job at a time.</p>
+    <p id="save-state"></p>
+    <div>
+      <button class="btn" id="btn-start">▶ New Game</button>
+      <button class="btn ghost" id="btn-continue">Continue</button>
+    </div>
+    <div class="keys">WASD move · Shift sprint · E enter / steal car · F punch · Click / Space shoot<br>
+    R reload · M start job · P pause · U mute · Progress autosaves after every job</div>
+  </div>
+
+  <div id="end-screen" class="screen hidden">
+    <h1 id="end-title">WASTED</h1>
+    <p id="end-text"></p>
+    <div>
+      <button class="btn" id="btn-respawn">Get back up (R)</button>
+      <button class="btn ghost" id="btn-title">Title screen</button>
+    </div>
+  </div>
+</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

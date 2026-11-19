@@ -1,88 +1,70 @@
-// Keyboard and mouse input. Held keys give a steering vector; one-shot presses
-// (confirm, pause, enter car, punch, shoot, horn, radio) are queued as bit flags
-// and taken once by the loop, so a press between two frames is never lost.
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_ENTER = 4;
-export const ACTION_PUNCH = 8;
-export const ACTION_SHOOT = 16;
-export const ACTION_HORN = 32;
-export const ACTION_RADIO = 64;
-export const ACTION_MAP = 128;
-
-const UP = new Set(['ArrowUp', 'KeyW']);
-const DOWN = new Set(['ArrowDown', 'KeyS']);
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-const ENTER = new Set(['KeyE', 'KeyF']);
-const PUNCH = new Set(['KeyQ']);
-const SHOOT = new Set(['KeyX']);
-const HORN = new Set(['KeyH']);
-const RADIO = new Set(['KeyR']);
-const MAP = new Set(['KeyM']);
-const SPRINT = new Set(['ShiftLeft', 'ShiftRight']);
-
-export function createInput(canvas) {
-  const held = new Set();
-  let actions = 0;
-  let mouse = { x: 0, y: 0, down: false };
-
-  function onKey(event, down) {
-    const code = event.code;
-    if (down) {
-      if (CONFIRM.has(code)) { if (!event.repeat) actions |= ACTION_CONFIRM; }
-      else if (PAUSE.has(code)) { if (!event.repeat) actions |= ACTION_PAUSE; }
-      else if (ENTER.has(code)) { if (!event.repeat) actions |= ACTION_ENTER; }
-      else if (PUNCH.has(code)) { if (!event.repeat) actions |= ACTION_PUNCH; }
-      else if (SHOOT.has(code)) { if (!event.repeat) actions |= ACTION_SHOOT; }
-      else if (HORN.has(code)) { if (!event.repeat) actions |= ACTION_HORN; }
-      else if (RADIO.has(code)) { if (!event.repeat) actions |= ACTION_RADIO; }
-      else if (MAP.has(code)) { if (!event.repeat) actions |= ACTION_MAP; }
-      else if (!UP.has(code) && !DOWN.has(code) && !LEFT.has(code) && !RIGHT.has(code) && !SPRINT.has(code)) return;
-    }
-    if (UP.has(code) || DOWN.has(code) || LEFT.has(code) || RIGHT.has(code) || SPRINT.has(code)) {
-      if (down) held.add(code); else held.delete(code);
-    }
-    event.preventDefault();
+// Keyboard + mouse input for Solmar Bay. No game logic here — main.js reads the
+// pressed keys each frame.
+export class Input {
+  constructor(canvas) {
+    this.keys = new Set();
+    this.mouse = { x: 0, y: 0, down: false, clicked: false };
+    this.canvas = canvas;
+    this._onKeyDown = (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+        e.preventDefault();
+      }
+      this.keys.add(e.code);
+      if (e.code === 'KeyM' || e.code === 'KeyE' || e.code === 'KeyP' || e.code === 'KeyU') {
+        this._pressed.add(e.code);
+      }
+    };
+    this._onKeyUp = (e) => this.keys.delete(e.code);
+    this._pressed = new Set();
+    this._onMouseMove = (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.mouse.x = e.clientX - r.left;
+      this.mouse.y = e.clientY - r.top;
+    };
+    this._onMouseDown = (e) => {
+      this.mouse.down = true;
+      this.mouse.clicked = true;
+      this._onMouseMove(e);
+    };
+    this._onMouseUp = () => { this.mouse.down = false; };
+    this._onBlur = () => this.keys.clear();
   }
 
-  window.addEventListener('keydown', (e) => onKey(e, true));
-  window.addEventListener('keyup', (e) => onKey(e, false));
-  window.addEventListener('blur', () => held.clear());
-  canvas.addEventListener('pointerdown', (e) => {
-    mouse = { x: e.clientX, y: e.clientY, down: true };
-    actions |= ACTION_CONFIRM;
-  });
-  canvas.addEventListener('pointermove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
-  canvas.addEventListener('pointerup', () => { mouse.down = false; });
-  // Mouse aim: click (left) punches on foot, fires the pistol while held in a car
-  // is not needed — keyboard X fires; a click always counts as confirm on menus.
-  return {
-    vector() {
-      let x = 0, y = 0;
-      for (const c of held) {
-        if (UP.has(c)) y -= 1; else if (DOWN.has(c)) y += 1;
-        else if (LEFT.has(c)) x -= 1; else if (RIGHT.has(c)) x += 1;
-      }
-      const len = Math.hypot(x, y) || 1;
-      return { x: x / len, y: y / len, sprint: [...held].some((c) => SPRINT.has(c)) };
-    },
-    mouse() { return mouse; },
-    takeActions() { const taken = actions; actions = 0; return taken; },
-  };
-}
+  attach() {
+    window.addEventListener('keydown', this._onKeyDown);
+    window.addEventListener('keyup', this._onKeyUp);
+    window.addEventListener('blur', this._onBlur);
+    this.canvas.addEventListener('mousemove', this._onMouseMove);
+    this.canvas.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup', this._onMouseUp);
+  }
 
-// Headless stand-in for tests: the same shape, driven by a script.
-export function createTestInput() {
-  let vec = { x: 0, y: 0, sprint: false };
-  let actions = 0;
-  return {
-    vector: () => vec,
-    mouse: () => ({ x: 0, y: 0, down: false }),
-    takeActions() { const t = actions; actions = 0; return t; },
-    setVector(v) { vec = v; },
-    press(flag) { actions |= flag; },
-  };
+  down(code) {
+    return this.keys.has(code);
+  }
+
+  // True once per physical press; consumed at the end of each frame.
+  pressed(code) {
+    return this._pressed.has(code);
+  }
+
+  endFrame() {
+    this._pressed.clear();
+    this.mouse.clicked = false;
+  }
+
+  // WASD / arrows as a -1..1 movement vector.
+  moveVector() {
+    let x = 0;
+    let y = 0;
+    if (this.down('KeyA') || this.down('ArrowLeft')) x -= 1;
+    if (this.down('KeyD') || this.down('ArrowRight')) x += 1;
+    if (this.down('KeyW') || this.down('ArrowUp')) y -= 1;
+    if (this.down('KeyS') || this.down('ArrowDown')) y += 1;
+    if (x !== 0 && y !== 0) {
+      x *= Math.SQRT1_2;
+      y *= Math.SQRT1_2;
+    }
+    return { x, y };
+  }
 }

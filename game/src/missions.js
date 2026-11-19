@@ -1,143 +1,192 @@
-// Story and missions for Solmar Bay. The player is Nia Solano, a getaway
-// driver back in her hometown after five years away; her old friend Rico
-// Ferrante pulls her into one last run of jobs against the Harlow crew, who
-// run the docks. Six story missions, in order, plus two side activities
-// (taxi fares and hidden sun-coins) that pay cash any time.
-// A mission is a list of stages; each stage has an objective line, a target
-// point and a radius, and a kind: go, talk, steal, fight, collect, deliver,
-// escape. The world checks the stage each step and advances it.
-import { MISSION_REWARDS } from './config.js';
+// Six story missions for Nia Solano. Each mission is a small state machine over
+// the shared world: objectives are checked every tick and the mission completes,
+// fails, or advances on its own terms. No DOM here — main.js presents the text.
+import { MISSION_DEFS, CAR_MODELS } from './config.js';
+import { makeCar, makeThug, nearestCar } from './world.js';
+import { clearWanted, addHeat } from './police.js';
+import { dist2 } from './random.js';
+import { snapToRoad } from './city.js';
 
-export const STORY_INTRO = [
-  'Nia Solano is home. Five years away, and Solmar Bay still smells of salt and gasoline.',
-  'Rico Ferrante waits at the Marina — one last run of jobs, then she is out for good.',
-  'The Harlow crew runs the docks now. Nia plans to take it all back, one job at a time.',
-];
-
-function stage(kind, text, x, y, radius, extra) {
-  return { kind, text, x, y, radius: radius || 70, ...(extra || {}) };
+export function missionDef(index) {
+  return MISSION_DEFS[index] ?? null;
 }
 
-export const MISSIONS = [
-  {
-    id: 1, name: 'First Light', giver: 'Rico Ferrante',
-    briefing: 'Meet Rico at the Marina Pier. He has a car and a plan — drive the package to the safehouse in Old Town.',
-    stages: [
-      stage('go', 'Drive to Rico at the Marina Pier', 2700, 480, 80),
-      stage('talk', 'Talk to Rico (walk up to him)', 2700, 480, 60),
-      stage('deliver', 'Drive the package to the Solmar Safehouse', 600, 690, 80, { needCar: true }),
-    ],
-  },
-  {
-    id: 2, name: 'Hot Wheels', giver: 'Rico Ferrante',
-    briefing: 'The Harlow crew parked a Nightshade GT at Bayview Garage. Steal it — any car will do to get there, but bring the GT back.',
-    stages: [
-      stage('go', 'Get to Bayview Garage', 2400, 990, 90),
-      stage('steal', 'Steal the Nightshade GT (press E beside it)', 2400, 990, 70, { model: 'Nightshade GT' }),
-      stage('deliver', 'Deliver the GT to the Safehouse — the cops will notice', 600, 690, 80, { wanted: 2 }),
-    ],
-  },
-  {
-    id: 3, name: 'Payback at the Docks', giver: 'Rico Ferrante',
-    briefing: 'Harlow’s enforcers are shaking down the dock workers. Go to the Harbor Docks Gate and send them packing.',
-    stages: [
-      stage('go', 'Reach the Harbor Docks Gate', 2700, 1890, 90),
-      stage('fight', 'Deal with the Harlow enforcers (5)', 2700, 1890, 260, { count: 5 }),
-      stage('go', 'Get clear — return to the Safehouse', 600, 690, 80),
-    ],
-  },
-  {
-    id: 4, name: 'Fare Play', giver: 'Mara the Dispatcher',
-    briefing: 'Mara needs a driver for the night shift. Pick up three fares around the city and drop each one off — tips pay well.',
-    stages: [
-      stage('taxi', 'Pick up fare 1 — Downtown Plaza', 1800, 690, 70, { fare: 1 }),
-      stage('taxi', 'Drop fare 1 at Palm Beach Boardwalk', 1200, 2490, 80, { fare: 1, drop: true }),
-      stage('taxi', 'Pick up fare 2 — Cedar Hills Lookout', 600, 1590, 70, { fare: 2 }),
-      stage('taxi', 'Drop fare 2 at the Marina Pier', 2700, 480, 80, { fare: 2, drop: true }),
-      stage('taxi', 'Pick up fare 3 — Sunset Park Fountain', 1800, 1590, 70, { fare: 3 }),
-      stage('taxi', 'Drop fare 3 at the Safehouse', 600, 690, 80, { fare: 3, drop: true }),
-    ],
-  },
-  {
-    id: 5, name: 'Three Keys', giver: 'Rico Ferrante',
-    briefing: 'The Harlow crew hid three lockboxes around the city — Downtown, the Park and the Beach. Grab all three before the timer runs out.',
-    stages: [
-      stage('collect', 'Collect lockbox 1 — Downtown Plaza', 1800, 690, 70, { timer: 150 }),
-      stage('collect', 'Collect lockbox 2 — Sunset Park Fountain', 1800, 1590, 70),
-      stage('collect', 'Collect lockbox 3 — Palm Beach Boardwalk', 1200, 2490, 70),
-      stage('deliver', 'Bring the lockboxes to the Safehouse', 600, 690, 80),
-    ],
-  },
-  {
-    id: 6, name: 'The Solmar Job', giver: 'Rico Ferrante',
-    briefing: 'The finale. An armored van crosses Downtown at dusk. Ram it, take the cash, and lose a four-star wanted level at the Safehouse.',
-    stages: [
-      stage('go', 'Intercept the armored van in Downtown', 1800, 690, 120),
-      stage('fight', 'Stop the armored van — ram it or shoot it out', 1800, 690, 320, { count: 1, van: true }),
-      stage('collect', 'Grab the cash from the van', 1800, 690, 80),
-      stage('escape', 'Lose the cops — reach the Safehouse with no wanted level', 600, 690, 90, { wanted: 4 }),
-    ],
-  },
-];
-
-export const SUN_COINS = 20; // hidden collectibles scattered across the city
-export const TAXI_FARE_PAY = 150;
-
-export function createMissionState() {
-  return {
-    index: 0,            // which mission is active (0-based); 6 = story complete
-    stage: 0,            // stage inside the active mission
-    started: false,      // mission briefing shown / timer running
-    fightLeft: 0, timer: 0, fareInCar: false,
-    completed: [],       // ids of finished missions
-    banner: '', bannerT: 0,
-  };
-}
-
-export function currentMission(ms) {
-  return ms.index < MISSIONS.length ? MISSIONS[ms.index] : null;
-}
-export function currentStage(ms) {
-  const m = currentMission(ms);
-  return m ? m.stages[ms.stage] : null;
-}
-export function missionReward(ms) { return MISSION_REWARDS[ms.index] || 0; }
-
-// Human-readable objective line for the HUD.
-export function objectiveText(ms) {
-  const m = currentMission(ms);
-  if (!m) return 'Story complete — free roam. Find sun-coins, drive taxis, cause trouble.';
-  if (!ms.started) return `New job: ${m.name} — head for the gold marker`;
-  const s = currentStage(ms);
-  if (!s) return m.name;
-  let text = s.text;
-  if (s.kind === 'fight' && ms.fightLeft > 0) text += ` — ${ms.fightLeft} left`;
-  if (ms.timer > 0) text += ` — ${Math.ceil(ms.timer)}s`;
-  return text;
-}
-
-export function startMission(ms) {
-  const m = currentMission(ms);
-  if (!m) return;
-  ms.started = true; ms.stage = 0; ms.fightLeft = 0; ms.timer = 0;
-  const s = m.stages[0];
-  if (s && s.timer) ms.timer = s.timer;
-  if (s && s.kind === 'fight') ms.fightLeft = s.count;
-  ms.banner = `${m.name} — ${m.giver}`; ms.bannerT = 4;
-}
-
-export function advanceStage(ms) {
-  const m = currentMission(ms);
-  if (!m) return false;
-  ms.stage += 1;
-  if (ms.stage >= m.stages.length) {
-    ms.completed.push(m.id);
-    ms.index += 1; ms.stage = 0; ms.started = false; ms.timer = 0;
-    return true; // mission complete
+export function startMission(world) {
+  const def = missionDef(world.missionIndex);
+  if (!def) {
+    world.mission = null;
+    return null;
   }
-  const s = m.stages[ms.stage];
-  if (s.timer) ms.timer = s.timer;
-  if (s.kind === 'fight') ms.fightLeft = s.count;
-  ms.fareInCar = s.kind === 'taxi' && !!s.drop;
-  return false;
+  const m = {
+    def,
+    stage: 'go', // go | pickup | deliver | escape | done
+    progress: 0,
+    target: { ...def.target },
+    timer: 0,
+    thugsSpawned: false,
+    car: null,
+    passenger: false,
+  };
+  world.mission = m;
+
+  if (def.kind === 'drive' || def.kind === 'deliver') {
+    // The mission car waits near the player, parked on a road.
+    const spot = snapToRoad(world.player.x + 160, world.player.y + 40);
+    const model = CAR_MODELS.find((c) => c.id === def.carModel) || CAR_MODELS[0];
+    const car = makeCar(model, spot, world.rng);
+    world.cars.push(car);
+    m.car = car;
+    m.stage = 'steal';
+  }
+  if (def.kind === 'escort') {
+    m.stage = 'pickup';
+    m.target = { ...def.pickup };
+  }
+  if (def.kind === 'beat' || def.kind === 'finale') {
+    spawnThugs(world, m);
+  }
+  if (def.kind === 'escape') {
+    addHeat(world, 55, 'shoot');
+    m.stage = 'escape';
+  }
+  if (def.kind === 'getaway') {
+    // handled by escort
+  }
+  world.messages.push({ text: `New job: ${def.title} — ${def.brief}`, t: 6 });
+  return m;
+}
+
+function spawnThugs(world, m) {
+  const def = m.def;
+  const base = def.spawn ?? def.target;
+  const n = def.count ?? 3;
+  for (let i = 0; i < n; i++) {
+    const t = makeThug(base.x + world.rng.range(-90, 90), base.y + world.rng.range(-90, 90), world.rng);
+    world.thugs.push(t);
+  }
+  m.thugsSpawned = true;
+}
+
+export function missionObjectiveText(world) {
+  const m = world.mission;
+  if (!m) {
+    const next = missionDef(world.missionIndex);
+    if (!next) return 'All jobs done — Solmar Bay is yours. Free roam!';
+    return `Next job: ${next.title} — press M to start`;
+  }
+  const d = m.def;
+  switch (d.kind) {
+    case 'drive':
+      return m.stage === 'steal'
+        ? `Steal the ${d.carModel === 'coral' ? 'Coral Coupe' : 'mission car'} nearby, then drive to Sunset Park`
+        : 'Drive to the Sunset Park meet';
+    case 'deliver':
+      return m.stage === 'steal'
+        ? 'Steal the Harbor Hauler at the docks'
+        : 'Deliver the Hauler to the Cedar Hills garage';
+    case 'beat':
+      return `Put down the Harlow lookouts (${m.progress}/${d.count})`;
+    case 'escape':
+      return 'Lose the cops — break line of sight and stay clean';
+    case 'escort':
+      return m.stage === 'pickup'
+        ? 'Pick Rico up at the Marina'
+        : 'Drive Rico to the Cedar Hills safehouse';
+    case 'finale':
+      return m.stage === 'fight'
+        ? `Drop the Harlow enforcers (${m.progress}/${d.count})`
+        : 'Escape to Palm Beach';
+    default:
+      return d.brief;
+  }
+}
+
+export function completeMission(world) {
+  const m = world.mission;
+  if (!m) return;
+  world.cash += m.def.reward;
+  world.completedMissions.push(m.def.id);
+  world.stats.missionsDone += 1;
+  world.missionIndex += 1;
+  world.messages.push({ text: `Job done: ${m.def.title} — +$${m.def.reward}`, t: 5 });
+  clearWanted(world);
+  world.mission = null;
+  if (world.missionIndex >= MISSION_DEFS.length) {
+    world.mode = 'won';
+  }
+}
+
+export function failMission(world, reason) {
+  world.mission = null;
+  world.messages.push({ text: `Job failed: ${reason}. Press M to retry.`, t: 5 });
+  // Retry the same mission next time.
+}
+
+export function updateMission(world, dt) {
+  const m = world.mission;
+  if (!m) return;
+  const d = m.def;
+  const p = world.player;
+  m.timer += dt;
+
+  switch (d.kind) {
+    case 'drive':
+    case 'deliver': {
+      if (m.stage === 'steal') {
+        if (p.car === m.car) {
+          m.stage = 'drive';
+          world.messages.push({ text: 'Got it. Now drive to the marker.', t: 3 });
+        }
+      } else if (p.car === m.car && dist2(p.x, p.y, m.target.x, m.target.y) < d.radius * d.radius) {
+        completeMission(world);
+      }
+      break;
+    }
+    case 'beat': {
+      if (m.thugsDownAtStart === undefined) m.thugsDownAtStart = world.stats.thugsDown;
+      m.progress = world.stats.thugsDown - m.thugsDownAtStart;
+      if (m.progress >= d.count) completeMission(world);
+      break;
+    }
+    case 'escape': {
+      if (world.wanted === 0 && m.timer > 5) completeMission(world);
+      break;
+    }
+    case 'escort': {
+      if (m.stage === 'pickup') {
+        if (dist2(p.x, p.y, m.target.x, m.target.y) < 90 * 90) {
+          m.stage = 'drive';
+          m.passenger = true;
+          m.target = { ...d.target };
+          addHeat(world, 30, 'shoot');
+          world.messages.push({ text: 'Rico is in. Drive — and watch the mirrors.', t: 4 });
+        }
+      } else if (dist2(p.x, p.y, m.target.x, m.target.y) < d.radius * d.radius) {
+        completeMission(world);
+      }
+      break;
+    }
+    case 'finale': {
+      if (m.stage === 'go') m.stage = 'fight';
+      if (m.stage === 'fight') {
+        if (m.thugsDownAtStart === undefined) m.thugsDownAtStart = world.stats.thugsDown;
+        m.progress = world.stats.thugsDown - m.thugsDownAtStart;
+        if (m.progress >= d.count) {
+          m.stage = 'escape';
+          m.target = { ...d.target };
+          world.messages.push({ text: 'Harlow is finished. Get to Palm Beach!', t: 4 });
+        }
+      } else if (dist2(p.x, p.y, m.target.x, m.target.y) < d.radius * d.radius) {
+        completeMission(world);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+// Called by combat code when a thug goes down.
+export function countThugDown(world) {
+  world.stats.thugsDown += 1;
 }

@@ -1,126 +1,98 @@
-// Staged screenshot scenes behind ?shot=title|foot|drive|chase (with &seed=N).
-// Each one plays the real game forward from a fresh world with a scripted
-// autopilot (drive toward the mission marker, punch/shoot on cue), so the
-// frame is what real play looks like and the same seed always gives the same
-// frame. main.js paints the staged scene twice and sets window.__shotReady.
-// Staging runs invulnerable (no wasted/busted mid-scene), then the scene is
-// tidied — full health, a healthy car, the wanted level and toast set — so
-// the frame shows the game at its best, still entirely its own live state.
-import { STEP } from './config.js';
-import { setStars } from './police.js';
-import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Deterministic screenshot staging: ?shot=title|chase|fight|drive&seed=N
+// puts the game into a fixed, good-looking scene so screenshots are stable.
+// The game itself never depends on this module.
+import { makeCopCar, makeThug } from './world.js';
 import { startMission } from './missions.js';
-import { createTrafficCar } from './traffic.js';
+import { addHeat } from './police.js';
 import { CAR_MODELS } from './config.js';
 
-function driveToward(world, tx, ty) {
-  const p = world.state.player;
-  const car = p.inCar;
-  if (!car) return { x: 0, y: 0, sprint: false };
-  const dx = tx - car.x, dy = ty - car.y;
-  const want = Math.atan2(dy, dx);
-  let diff = want - car.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  return { x: diff > 0.05 ? 1 : diff < -0.05 ? -1 : 0, y: -1, sprint: false };
-}
-function walkToward(world, tx, ty) {
-  const p = world.state.player;
-  const dx = tx - p.x, dy = ty - p.y;
-  const len = Math.hypot(dx, dy) || 1;
-  return { x: dx / len, y: dy / len, sprint: true };
-}
-
-// A fake input object with the same shape as createInput / createTestInput.
-function scriptedInput() {
-  let vec = { x: 0, y: 0, sprint: false };
-  let actions = 0;
+export function shotFromUrl() {
+  const q = new URLSearchParams(window.location.search);
   return {
-    vector: () => vec,
-    mouse: () => ({ x: 0, y: 0, down: false }),
-    takeActions() { const t = actions; actions = 0; return t; },
-    set(v) { vec = v; },
-    press(f) { actions |= f; },
+    shot: q.get('shot') || null,
+    seed: Number(q.get('seed') || 20261119),
   };
 }
 
-function runSteps(world, input, seconds, steer) {
-  const p = world.state.player;
-  p.invulnerable = 999; // staging never ends wasted or busted
-  for (let i = 0; i < seconds / STEP; i += 1) {
-    steer(i);
-    world.step(STEP, input, input.takeActions());
-    if (world.state.over) break;
+export function applyShot(world, shot) {
+  if (!shot) return;
+  const p = world.player;
+  world.mode = 'play';
+  if (shot === 'title') {
+    world.mode = 'title';
+    p.x = 2650;
+    p.y = 480;
+    world.camera.x = 2650;
+    world.camera.y = 480;
+    world.time = 17.4 * 3600; // golden hour over the Marina
+    world.rain = 0;
+    return;
   }
-  p.invulnerable = 0;
-}
-
-// Put the staged scene in presentation shape: alive, healthy, banner gone,
-// cash and wanted level as the scene promises.
-function tidy(world, stars) {
-  const st = world.state;
-  st.over = null;
-  st.player.health = 100;
-  st.player.armor = 50;
-  st.player.cash = 1250;
-  if (st.player.inCar) st.player.inCar.health = 100;
-  st.missions.bannerT = 0;
-  st.toastT = 0;
-  if (stars) setStars(st.police, stars, world.world);
-}
-
-export function stageShot(name, world) {
-  const input = scriptedInput();
-  const p = world.state.player;
-  const st = world.state;
-  if (name === 'title') {
-    return { screen: SCREEN_TITLE, best: 1250 };
+  if (shot === 'drive') {
+    world.time = 17.6 * 3600;
+    world.rain = 0;
+    const model = CAR_MODELS.find((c) => c.id === 'palm');
+    const car = world.cars.find((c) => c.model === 'palm') || world.cars[0];
+    car.x = 1860;
+    car.y = 760;
+    car.angle = Math.PI / 2;
+    car.speed = 300;
+    car.driver = false;
+    p.onFoot = false;
+    p.car = car;
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = car.angle;
+    world.camera.x = car.x;
+    world.camera.y = car.y;
+    return;
   }
-  if (name === 'foot') {
-    // On foot at the Harbor Docks, mid-mission 3: Harlow enforcers to fight.
-    st.missions.index = 2; startMission(st.missions);
-    p.x = 2580; p.y = 1780; p.angle = Math.PI / 4;
-    runSteps(world, input, 4, (i) => {
-      input.set(walkToward(world, 2700, 1890));
-      if (i % 45 === 0) input.press(8);  // punch
-      if (i % 90 === 0) input.press(16); // shoot
-    });
-    // Face the nearest enforcer, so the fight reads at a glance.
-    const foe = st.enemies.find((e) => !e.dead);
-    if (foe) p.angle = Math.atan2(foe.y - p.y, foe.x - p.x);
-    tidy(world, 2);
-    st.toast = 'The Harlow crew is here — deal with them!';
-    st.toastT = 4;
-    return { screen: SCREEN_PLAY, best: 1250 };
+  if (shot === 'chase') {
+    world.time = 13 * 3600;
+    world.rain = 0;
+    const car = world.cars.find((c) => c.model === 'coral') || world.cars[0];
+    car.x = 1500;
+    car.y = 760;
+    car.angle = 0;
+    car.speed = 320;
+    car.driver = false;
+    p.onFoot = false;
+    p.car = car;
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = 0;
+    addHeat(world, 55, 'shoot');
+    // Two interceptors on the player's tail.
+    for (let i = 0; i < 2; i++) {
+      const cop = makeCopCar(car.x - 130 - i * 90, car.y + (i === 0 ? -14 : 16), world.rng);
+      cop.angle = 0;
+      cop.speed = 330;
+      world.cops.push(cop);
+      world.cars.push(cop);
+    }
+    world.camera.x = car.x;
+    world.camera.y = car.y;
+    return;
   }
-  if (name === 'drive') {
-    // Driving the stolen Nightshade GT along Palm Beach at sunset, mission 2.
-    st.missions.index = 1; startMission(st.missions);
-    const gt = st.cars.find((c) => c.missionCar) || createTrafficCar(world.random, 1200, 2490, CAR_MODELS[5], false);
-    p.x = gt.x; p.y = gt.y;
-    world.enterCar(gt);
-    gt.x = 1200; gt.y = 2490; gt.angle = 0;
-    st.clock = 17 * 60 + 30; // 17:30, golden hour
-    runSteps(world, input, 5, () => input.set(driveToward(world, 2400, 2400)));
-    tidy(world, 1);
-    return { screen: SCREEN_PLAY, best: 1250 };
+  if (shot === 'fight') {
+    world.time = 10.5 * 3600;
+    world.rain = 0;
+    p.onFoot = true;
+    p.car = null;
+    p.x = 860;
+    p.y = 760;
+    p.angle = 0;
+    world.thugs = [];
+    const t1 = makeThug(920, 730, world.rng);
+    const t2 = makeThug(800, 800, world.rng);
+    t2.health = 55;
+    world.thugs.push(t1, t2);
+    world.mission = {
+      def: { id: 'shakedown', title: 'Shakedown', kind: 'beat', count: 3, reward: 650 },
+      stage: 'go', progress: 1, target: { x: 860, y: 760 }, timer: 0,
+    };
+    world.camera.x = p.x;
+    world.camera.y = p.y;
+    return;
   }
-  // cover / chase (default): a 3-star police chase through Downtown in a
-  // stolen coupe, mission 6's escape in progress, minimap + HUD + wanted.
-  st.missions.index = 5; startMission(st.missions);
-  st.missions.stage = 3;
-  const coupe = createTrafficCar(world.random, 1800, 690, CAR_MODELS[2], false);
-  st.cars.push(coupe);
-  p.x = coupe.x; p.y = coupe.y;
-  world.enterCar(coupe);
-  coupe.x = 1740; coupe.y = 690; coupe.angle = 0;
-  st.clock = 18 * 60 + 20;
-  runSteps(world, input, 5, (i) => {
-    input.set(driveToward(world, 600, 690));
-    if (i % 120 === 0) input.press(32); // horn
-  });
-  tidy(world, 3);
-  st.toast = 'WANTED — 3 stars! Lose the cops!';
-  st.toastT = 4;
-  return { screen: SCREEN_PLAY, best: 1250 };
 }
