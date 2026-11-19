@@ -1,9 +1,21 @@
-# Solmar Bay — an open-world crime story
+# makefun-gta6-01
 
-An original open-world crime game in the spirit of GTA 6, built for the
-make.fun **Make GTA 6** bounty (gta6-01). Every name, place, person, vehicle,
-story, piece of art and sound is invented for this game — nothing is taken
-from Rockstar Games or any other commercial game.
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/yzrzlrizal-blip/makefun-gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/yzrzlrizal-blip/makefun-gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
+Solmar Bay is an original open-world crime game: getaway driver Nia Solano runs six story jobs across a 3,600 × 2,700 seaside city, stealing cars, losing the Solmar PD, and taking back the docks from the Harlow crew.
+
+## Run it
+
+```sh
+python3 -m http.server --directory game 8123
+# open http://localhost:8123/
+```
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=wdbz3sg5&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
 
 ## The game
 
@@ -36,6 +48,10 @@ beach and sea, with a day/night clock and occasional rain.
 - **Sound and music** — everything is synthesized with WebAudio: an
   original synthwave bassline on three radio stations, engine hum, sirens,
   gunshots, horns and pickups. No audio files. M mutes, R changes station.
+
+Every name, place, person, vehicle, story, piece of art and sound is
+invented for this game — nothing is taken from Rockstar Games or any other
+commercial game.
 
 ## Controls
 

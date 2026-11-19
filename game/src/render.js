@@ -330,7 +330,10 @@ export function createRenderer(canvas) {
       'Steal cars, lose the cops, run six story jobs, find 20 sun-coins.',
       best > 0 ? `Best cash earned: $${best.toLocaleString('en-US')}` : 'No save yet — a new story starts at the Safehouse.',
     ];
-    drawPanel('SOLMAR BAY', lines, state.hasSave ? 'Press Space to play — or L to continue your saved game' : 'Press Space or click to start', '#f2c94c');
+    // The title screen's prompt offers "continue your saved game" only when a
+    // save exists; world.hasSave() reads localStorage, while world.state
+    // carries no hasSave flag, so ask the world object, not the state.
+    drawPanel('SOLMAR BAY', lines, world.hasSave() ? 'Press Space to play — or L to continue your saved game' : 'Press Space or click to start', '#f2c94c');
   }
 
   function drawOver(world, state, best) {
